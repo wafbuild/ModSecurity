@@ -16,22 +16,107 @@
 #include <string>
 #include <memory>
 
+#include <unistd.h>
+
+#define NUM_THREADS 20
+
+
+char request_header[] =  "" \
+    "GET /tutorials/other/top-20-mysql-best-practices/ HTTP/1.1\n\r" \
+    "Host: net.tutsplus.com\n\r" \
+    "User-Agent: Mozilla/5.0 (Windows; U; Windows NT 6.1; en-US; rv:1.9.1.5)" \
+    " Gecko/20091102 Firefox/3.5.5 (.NET CLR 3.5.30729)\n\r" \
+    "Accept: text/html,application/xhtml+xml,application/xml; " \
+    "q=0.9,*/*;q=0.8\n\r" \
+    "Accept-Language: en-us,en;q=0.5\n\r" \
+    "Accept-Encoding: gzip,deflate\n\r" \
+    "Accept-Charset: ISO-8859-1,utf-8;q=0.7,*;q=0.7\n\r" \
+    "Keep-Alive: 300\n\r" \
+    "Connection: keep-alive\n\r" \
+    "Cookie: PHPSESSID=r2t5uvjq435r4q7ib3vtdjq120\n\r" \
+    "Pragma: no-cache\n\r" \
+    "Cache-Control: no-cache\n\r";
+
+char request_uri[] = "/test.pl?param1=test&para2=test2";
+
+char request_body[] = "";
+
+char response_headers[] = "" \
+    "HTTP/1.1 200 OK\n\r" \
+    "Content-Type: text/xml; charset=utf-8\n\r" \
+    "Content-Length: length\n\r";
+
+char response_body[] = "" \
+    "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\r" \
+    "<soap:Envelope xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" " \
+    "xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\" " \
+    "xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\">\n\r" \
+    "  <soap:Body>\n\r" \
+    "  <EnlightenResponse xmlns=\"http://clearforest.com/\">\n\r" \
+    "  <EnlightenResult>string</EnlightenResult>\n\r" \
+    "  </EnlightenResponse>\n\r" \
+    "  </soap:Body>\n\r" \
+    "</soap:Envelope>\n\r";
+
+char ip[] = "200.249.12.31";
+
 #include "modsecurity/rule_message.h"
 
 #ifndef EXAMPLES_READING_LOGS_VIA_RULE_MESSAGE_READING_LOGS_VIA_RULE_MESSAGE_H_
 #define EXAMPLES_READING_LOGS_VIA_RULE_MESSAGE_READING_LOGS_VIA_RULE_MESSAGE_H_
 
 
+struct data_ms {
+    modsecurity::ModSecurity *modsec;
+    modsecurity::Rules *rules;
+};
+
+
+static void *process_request(void *data) {
+    struct data_ms *a = (struct data_ms *)data;
+    modsecurity::ModSecurity *modsec = a->modsec;
+    modsecurity::Rules *rules = a->rules;
+    int z = 0;
+
+    for (z = 0; z < 1000; z++) {
+        modsecurity::Transaction *modsecTransaction = \
+            new modsecurity::Transaction(modsec, rules, NULL);
+        modsecTransaction->processConnection(ip, 12345, "127.0.0.1", 80);
+        modsecTransaction->processURI(request_uri, "GET", "1.1");
+
+        usleep(10);
+        modsecTransaction->addRequestHeader("Host",
+            "net.tutsplus.com");
+        modsecTransaction->processRequestHeaders();
+        modsecTransaction->processRequestBody();
+        modsecTransaction->addResponseHeader("HTTP/1.1",
+            "200 OK");
+        modsecTransaction->processResponseHeaders(200, "HTTP 1.2");
+        modsecTransaction->appendResponseBody(
+            (const unsigned char*)response_body,
+            strlen((const char*)response_body));
+        modsecTransaction->processResponseBody();
+        modsecTransaction->processLogging();
+
+        delete modsecTransaction;
+    }
+
+    pthread_exit(NULL);
+    return NULL;
+}
+
+
 class ReadingLogsViaRuleMessage {
  public:
-    ReadingLogsViaRuleMessage(char *request_header,
+    ReadingLogsViaRuleMessage(
+        std::unordered_multimap<std::string, std::string> requestHeaders,
         char *request_uri,
         char *request_body,
         char *response_headers,
         char *response_body,
         char *ip,
         std::string rules) :
-            m_request_header(request_header),
+            m_requestHeaders(requestHeaders),
             m_request_uri(request_uri),
             m_request_body(request_body),
             m_response_headers(response_headers),
@@ -41,6 +126,11 @@ class ReadingLogsViaRuleMessage {
         { }
 
     int process() {
+        pthread_t threads[NUM_THREADS];
+        int i;
+        struct data_ms dms;
+        void *status;
+
         modsecurity::ModSecurity *modsec;
         modsecurity::Rules *rules;
         modsecurity::ModSecurityIntervention it;
@@ -58,30 +148,57 @@ class ReadingLogsViaRuleMessage {
             return -1;
         }
 
-        modsecurity::Transaction *modsecTransaction = \
-            new modsecurity::Transaction(modsec, rules, NULL);
-        modsecTransaction->processConnection(m_ip, 12345, "127.0.0.1", 80);
-        modsecTransaction->processURI(m_request_uri, "GET", "1.1");
+        dms.modsec = modsec;
+        dms.rules = rules;
 
-        modsecTransaction->addRequestHeader("Host",
-            "net.tutsplus.com");
-        modsecTransaction->processRequestHeaders();
-        modsecTransaction->processRequestBody();
-        modsecTransaction->addResponseHeader("HTTP/1.1",
-            "200 OK");
-        modsecTransaction->processResponseHeaders(200, "HTTP 1.2");
-        modsecTransaction->appendResponseBody(
-            (const unsigned char*)m_response_body,
-            strlen((const char*)m_response_body));
-        modsecTransaction->processResponseBody();
-        modsecTransaction->processLogging();
+        for (i = 0; i < NUM_THREADS; i++) {
+            pthread_create(&threads[i], NULL, process_request, (void *)&dms);
+        }
 
-        delete modsecTransaction;
+        usleep(10000);
+
+        for (i=0; i < NUM_THREADS; i++) {
+            pthread_join(threads[i], &status);
+        }
+
         delete rules;
         delete modsec;
+        pthread_exit(NULL);
         return 0;
 end:
         return -1;
+    }
+
+
+    static std::string highlightToText(
+        const modsecurity::RuleMessageHighlight &h) {
+        std::cout << " * ModSecurity variable to be highlighted" << std::endl;
+
+        for (const auto &i : h.m_variable) {
+            std::cout << "  - From: " << std::to_string(i.m_startingAt);
+            std::cout << " to: " << std::to_string(i.m_startingAt + i.m_size);
+            std::cout << std::endl;
+        }
+        std::cout << std::endl;
+
+        std::cout << " * Variable's values ";
+        std::cout << "(may include transformations)" << std::endl;
+        for (const auto &i : h.m_value) {
+            std::cout << "  - " << i.first << ": " << i.second << std::endl;
+        }
+        std::cout << std::endl;
+
+        std::cout << " * Operators match to be highlight inside ";
+        std::cout << "the variables (after transformations)" << std::endl;
+
+        for (const auto &i : h.m_op) {
+            std::cout << "  - From: " << i.m_area.m_startingAt;
+            std::cout << " to: " << std::to_string(i.m_area.m_startingAt \
+                + i.m_area.m_size);
+            std::cout << " [Value: " << i.m_value << "]" << std::endl;
+        }
+        std::cout << std::endl;
+        return "";
     }
 
     static void logCb(void *data, const void *ruleMessagev) {
@@ -108,10 +225,25 @@ end:
             std::cout << modsecurity::RuleMessage::log(ruleMessage);
             std::cout << std::endl;
         }
+        std::cout << std::endl;
+        std::cout << "Verbose details on the match highlight" << std::endl;
+        std::cout << "  Highlight reference string: ";
+        std::cout << ruleMessage->m_reference << std::endl;
+        std::cout << std::endl;
+        std::cout << "Details:" << std::endl;
+        modsecurity::RuleMessageHighlight h =
+            modsecurity::RuleMessage::computeHighlight(ruleMessage,
+                ruleMessage->m_buf);
+        highlightToText(h);
+        std::cout << "Highlight JSON:" << std::endl;
+        std::cout << ruleMessage->m_highlightJSON << std::endl;
+        std::cout << "Request:" << std::endl;
+        std::cout << ruleMessage->m_buf;
+        std::cout << std::endl;
     }
 
  protected:
-    char *m_request_header;
+    std::unordered_multimap<std::string, std::string> m_requestHeaders;
     char *m_request_uri;
     char *m_request_body;
     char *m_response_headers;

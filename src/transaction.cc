@@ -1467,6 +1467,45 @@ std::string Transaction::toOldAuditLogFormat(int parts,
 }
 
 
+std::string Transaction::toBuf() {
+    std::string a;
+
+    a.append(*m_variableRequestMethod.evaluate());
+    a.append(" ");
+    a.append(m_uri);
+    a.append(" HTTP/");
+    a.append(m_httpVersion);
+    a.append("\n");
+    std::vector<const collection::Variable *> l;
+    m_variableRequestHeaders.resolve(&l);
+    for (auto h : l) {
+        size_t pos = strlen("REQUEST_HEADERS:");
+        a.append((h->m_key->c_str() + pos));
+        a.append(": ");
+        a.append((h->m_value->c_str()));
+        a.append("\n");
+    }
+
+    if (this->m_requestBody.str().length() > 0) {
+        a.append(this->m_requestBody.str().c_str());
+        a.append("\n\n");
+    }
+#if 0
+    l.clear();
+    m_variableResponseHeaders.resolve(&l);
+    for (auto h : l) {
+        size_t pos = strlen("RESPONSE_HEADERS:");
+        a.append((h->m_key->c_str() + pos));
+        a.append(": ");
+        a.append((h->m_value->c_str()));
+    }
+    a.append("\n\n");
+    a.append(this->m_responseBody.str().c_str());
+#endif
+    return a;
+}
+
+
 std::string Transaction::toJSON(int parts) {
 #ifdef WITH_YAJL
     const unsigned char *buf;
@@ -1508,8 +1547,8 @@ std::string Transaction::toJSON(int parts) {
         utils::string::dash_if_empty(
             m_variableRequestMethod.evaluate()).c_str());
 
-    LOGFY_ADD_INT("http_version", m_httpVersion);
-    LOGFY_ADD("uri", this->m_uri);
+    LOGFY_ADD_INT("http_version", m_httpVersion.c_str());
+    LOGFY_ADD("uri", this->m_uri.c_str());
 
     if (parts & audit_log::AuditLog::CAuditLogPart) {
         // FIXME: check for the binary content size.
